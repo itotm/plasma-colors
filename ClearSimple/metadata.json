@@ -1,0 +1,19 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "1804363+itotm@users.noreply.github.com",
+                "Name": "ItoTM"
+            }
+        ],
+        "Category": "",
+        "Description": "A simple theme",
+        "EnabledByDefault": true,
+        "Id": "ClearSimple",
+        "License": "GPL",
+        "Name": "ClearSimple",
+        "Version": "0.1",
+        "Website": ""
+    },
+    "X-Plasma-API": "5.0"
+}
