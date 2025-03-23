@@ -1,2 +1,2 @@
 # plasma-colors
-Some color customization for KDE Plasma
+Some color customizations for KDE Plasma 6
