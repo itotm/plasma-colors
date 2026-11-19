@@ -20,9 +20,14 @@ for name in $themes; do
     case "$name" in
         PastelPaws) (cd "$root/PastelPaws" && python3 build.py >/dev/null) ;;
         CatPaw) (cd "$root/CatPaw" && python3 build.py >/dev/null) ;;
+        CatPawGrey) (cd "$root/CatPaw" && python3 build.py --variant grey >/dev/null) ;;
+        CatPawSoft) (cd "$root/CatPaw" && python3 build.py --variant soft >/dev/null) ;;
         *) echo "$name: unknown theme" >&2; exit 1 ;;
     esac
-    src="$root/$name/build"
+    case "$name" in
+        CatPaw*) src="$root/CatPaw/build" ;;
+        *) src="$root/$name/build" ;;
+    esac
     [ -f "$src/$name/index.theme" ] || { echo "$name: build failed" >&2; exit 1; }
     out="$outdir/$name-$version.tar.gz"
     rm -f "$out"

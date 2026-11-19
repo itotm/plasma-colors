@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Contact sheet of every shape: 1x and 3x, on light and dark backgrounds.
 
-Usage: python3 preview.py out.png [zoom]
+Usage: python3 preview.py out.png [zoom] [pink|grey|soft]
 A small cyan cross marks the hotspot on the zoomed copies.
 """
 import os
@@ -14,11 +14,16 @@ import build  # noqa: E402
 
 out = sys.argv[1] if len(sys.argv) > 1 else "preview.png"
 Z = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+build.VARIANT = build.VARIANTS[sys.argv[3] if len(sys.argv) > 3 else "pink"]
 
-items = [(n, f()) for n, f in build.CURSORS.items()]
-for n, (frames, _) in build.ANIMATED.items():
-    for i in (0, len(frames) // 3):
-        items.append(("%s#%d" % (n, i), frames[i]))
+items, anim = [], []
+for n, (frames, _) in build.shape_table().items():
+    if len(frames) == 1:
+        items.append((n, frames[0]))
+    else:
+        for i in (0, len(frames) // 3):
+            anim.append(("%s#%d" % (n, i), frames[i]))
+items += anim
 
 cols = 6
 cell_w, cell_h = 32 * Z + 32 + 30, 32 * Z * 2 + 40

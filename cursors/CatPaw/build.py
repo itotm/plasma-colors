@@ -5,14 +5,14 @@ Writes one SVG per cursor shape (Plasma 6 `cursors_scalable` format) and
 renders the same SVGs into classic Xcursor files (`cursors/`) for X11 and
 XWayland apps.  Every SVG uses a 32x32 canvas at nominal size 24, like Breeze.
 
-Usage:  python3 build.py [output-dir]      (default: ./build/CatPaw)
+Usage:  python3 build.py [--variant pink|grey|soft] [output-dir]
+        (default output: ./build/<theme dir of the variant>)
 """
 import json
 import math
 import os
 import shutil
 import struct
-import sys
 
 import cairo
 import gi
@@ -20,17 +20,38 @@ import gi
 gi.require_version("Rsvg", "2.0")
 from gi.repository import Rsvg  # noqa: E402
 
-THEME_DIR_NAME = "CatPaw"
-THEME_NAME = "Cat Paw"
+# Colour variants: theme directory, display name, comment and paw colours.
+# The fixed colours below (badges, outline) are shared by every variant.
+VARIANTS = {
+    "pink": {"dir": "CatPaw", "name": "Cat Paw",
+             "comment": "White cat paws with pink toe beans",
+             "fur": "#ffffff", "bean": "#f49ab0", "bean2": "#e07a95"},
+    "grey": {"dir": "CatPawGrey", "name": "Cat Paw Grey",
+             "comment": "Grey cat paws with dark grey toe beans",
+             "fur": "#b4b9c0", "bean": "#5e646c", "bean2": "#484d54"},
+    # White fur, pink beans, thin outline, Breeze Light for the shapes
+    # without a paw, pointer = open paw with one claw, openhand = all claws out.
+    "soft": {"dir": "CatPawSoft", "name": "Cat Paw Soft",
+             "comment": "White cat paws with pink toe beans and a thin outline",
+             "fur": "#ffffff", "bean": "#f49ab0", "bean2": "#e07a95",
+             "ow_scale": 0.36, "clawed": True,
+             "breeze": ("text", "vertical-text", "crosshair", "cell", "x-cursor")},
+}
+# Where the shapes listed in a variant's "breeze" are taken from (Breeze Light,
+# Plasma 6 SVG version, GPL-2.0-or-later, from the breeze package).
+BREEZE_DIR = "/usr/share/icons/Breeze_Light/cursors_scalable"
+VARIANT = VARIANTS["pink"]
 NOMINAL = 24
 CANVAS = 32
 XCURSOR_SIZES = [24, 30, 36, 48, 60, 72, 96]
 
-# Palette (Breeze Light style: white body, dark outline)
+# Palette (Breeze Light style: light body, dark outline).  FUR, BEAN and
+# BEAN_DARK are placeholders replaced with the variant's colours in Cursor.svg().
 OUT = "#232629"      # outline
-FUR = "#ffffff"      # body
-BEAN = "#f49ab0"     # paw pads
-BEAN_DARK = "#e07a95"
+FUR = "@fur@"        # body
+BEAN = "@bean@"      # paw pads
+BEAN_DARK = "@bean2@"
+WHITE = "#ffffff"    # symbols on the coloured badges
 RED = "#da4453"
 GREEN = "#27ae60"
 BLUE = "#3daee9"
@@ -107,8 +128,9 @@ class Cursor:
         self.body = []
         self.shadow = []
 
-    def sil(self, shapes, m=I, fill=FUR, ow=OW, outline=OUT):
+    def sil(self, shapes, m=I, fill=FUR, ow=None, outline=OUT):
         """Outlined silhouette: union of shapes, dark outline, solid fill."""
+        ow = (OW if ow is None else ow) * VARIANT.get("ow_scale", 1.0)
         sw = 2 * ow / m.scale
         inner = "".join(shapes)
         self.shadow.append('<g transform="%s" stroke-width="%.3f">%s</g>'
@@ -127,7 +149,7 @@ class Cursor:
                          % (m.svg(), attrs, extra, "".join(shapes)))
 
     def svg(self):
-        return (
+        text = (
             '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
             'viewBox="0 0 %d %d">\n'
             '<defs><filter id="sh" x="-20%%" y="-20%%" width="140%%" height="140%%" '
@@ -136,6 +158,8 @@ class Cursor:
             '<g opacity=".3" filter="url(#sh)"><g transform="translate(.4 1)" '
             'fill="#000" stroke="#000" stroke-linejoin="round">%s</g></g>\n%s\n</svg>\n'
             % (CANVAS, CANVAS, CANVAS, CANVAS, "".join(self.shadow), "\n".join(self.body)))
+        return (text.replace(FUR, VARIANT["fur"]).replace(BEAN_DARK, VARIANT["bean2"])
+                .replace(BEAN, VARIANT["bean"]))
 
 
 # ------------------------------------------------------------------ the paw
@@ -187,9 +211,11 @@ def claw_tip(rot=0, base=CLAW_BASE, length=CLAW_LEN):
 
 
 def draw_paw(c, m, style="open", claws=()):
+    """claws: (base_x, base_y, rotation[, length]) in paw coordinates."""
     fur, beans = paw_shapes(style)
-    for (bx, by, rot) in claws:
-        fur.append(claw_shape(bx, by, rot=rot))
+    for claw in claws:
+        bx, by, rot = claw[:3]
+        fur.append(claw_shape(bx, by, length=claw[3] if len(claw) > 3 else CLAW_LEN, rot=rot))
     c.sil(fur, m)
     c.add(beans, m, fill=BEAN)
 
@@ -260,8 +286,31 @@ def _center_ptr():
     return c
 
 
+# Open paw toes as (x, y, ry, rotation), for placing claws on top of them.
+OPEN_TOES = [(-2.35, -3.55, 2.85, -6), (2.35, -3.55, 2.85, 6),
+             (-5.6, -0.15, 2.6, -30), (5.6, -0.15, 2.6, 30)]
+
+
+def toe_claw(toe, length):
+    """Claw on top of a toe, pointing along the toe; returns (claw, tip)."""
+    x, y, ry, rot = toe
+    r = math.radians(rot)
+    d = ry - 0.6
+    bx, by = x + d * math.sin(r), y - d * math.cos(r)
+    return (bx, by, rot, length), (bx + length * math.sin(r), by - length * math.cos(r))
+
+
 @cursor("pointer")
 def _pointer():
+    if VARIANT.get("clawed"):
+        # open paw, one claw out from the left inner toe to point with
+        hot = (13.5, 2.5)
+        claw, (tx, ty) = toe_claw(OPEN_TOES[0], 4.2)
+        base = R(-10) * S(1.1)
+        px, py = base.apply(tx, ty)
+        c = Cursor(hot)
+        draw_paw(c, T(hot[0] - px, hot[1] - py) * base, claws=[claw])
+        return c
     c = Cursor((14.5, 2.6))
     # tip of the raised toe in local coords: about (-1.8, -9.5)
     m = T(14.5, 2.6) * R(-8) * S(1.12) * T(1.8, 9.5)
@@ -272,6 +321,10 @@ def _pointer():
 @cursor("openhand")
 def _openhand():
     c = Cursor((16, 16))
+    if VARIANT.get("clawed"):  # every claw out
+        claws = [toe_claw(t, 2.6)[0] for t in OPEN_TOES]
+        draw_paw(c, T(16, 17.2) * S(1.12), claws=claws)
+        return c
     draw_paw(c, T(16, 15.5) * S(1.2))
     return c
 
@@ -285,7 +338,7 @@ def _closedhand():
 
 # ---- badge cursors (small pointer paw + round badge bottom-right)
 def badge(c, color, cx=23.5, cy=23.5, r=5.6):
-    c.sil([C(cx, cy, r)], fill=color, ow=1.0, outline=FUR)
+    c.sil([C(cx, cy, r)], fill=color, ow=1.0, outline=WHITE)
     # thin dark ring outside the white ring for contrast on light backgrounds
     c.add([C(cx, cy, r + 1.0)], stroke=OUT, sw=0.6)
 
@@ -302,29 +355,29 @@ def badge_pointer(symbol):
 def sym_help(c):
     badge(c, BLUE)
     c.add([P("M21.4,21.9 C21.4,20.6 22.4,19.9 23.5,19.9 C24.7,19.9 25.6,20.7 25.6,21.8 "
-             "C25.6,23.4 23.5,23.4 23.5,25.0")], stroke=FUR, sw=1.5)
-    c.add([C(23.5, 27.0, 0.95)], fill=FUR)
+             "C25.6,23.4 23.5,23.4 23.5,25.0")], stroke=WHITE, sw=1.5)
+    c.add([C(23.5, 27.0, 0.95)], fill=WHITE)
 
 
 def sym_copy(c):
     badge(c, GREEN)
-    c.add([P("M23.5,20.2 V26.8 M20.2,23.5 H26.8")], stroke=FUR, sw=1.8)
+    c.add([P("M23.5,20.2 V26.8 M20.2,23.5 H26.8")], stroke=WHITE, sw=1.8)
 
 
 def sym_alias(c):
     badge(c, BLUE)
-    c.add([P("M20.8,26.6 C20.8,22.8 22.4,21.5 25.2,21.5")], stroke=FUR, sw=1.5)
-    c.add([poly([(24.6, 19.3), (27.4, 21.5), (24.6, 23.7)])], fill=FUR, stroke=FUR, sw=0.6)
+    c.add([P("M20.8,26.6 C20.8,22.8 22.4,21.5 25.2,21.5")], stroke=WHITE, sw=1.5)
+    c.add([poly([(24.6, 19.3), (27.4, 21.5), (24.6, 23.7)])], fill=WHITE, stroke=WHITE, sw=0.6)
 
 
 def sym_menu(c):
     badge(c, BLUE)
-    c.add([P("M20.8,21.3 H26.2 M20.8,23.5 H26.2 M20.8,25.7 H26.2")], stroke=FUR, sw=1.2)
+    c.add([P("M20.8,21.3 H26.2 M20.8,23.5 H26.2 M20.8,25.7 H26.2")], stroke=WHITE, sw=1.2)
 
 
 def sym_nodrop(c):
     badge(c, RED)
-    c.add([P("M21.1,21.1 L25.9,25.9 M25.9,21.1 L21.1,25.9")], stroke=FUR, sw=1.7)
+    c.add([P("M21.1,21.1 L25.9,25.9 M25.9,21.1 L21.1,25.9")], stroke=WHITE, sw=1.7)
 
 
 def sym_progress(c, frame=0, nframes=1):
@@ -389,10 +442,33 @@ def progress_frame(i):
     return c
 
 
-ANIMATED = {
-    "wait": ([wait_frame(i) for i in range(WAIT_FRAMES)], 45),
-    "progress": ([progress_frame(i) for i in range(PROGRESS_FRAMES)], 70),
-}
+class BreezeCursor:
+    """A Breeze Light shape used as is (same 32 canvas, nominal size 24)."""
+
+    def __init__(self, name):
+        d = os.path.join(BREEZE_DIR, name)
+        with open(os.path.join(d, "metadata.json")) as f:
+            meta = json.load(f)
+        assert len(meta) == 1 and meta[0]["nominal_size"] == NOMINAL, name
+        self.hot = (meta[0]["hotspot_x"], meta[0]["hotspot_y"])
+        with open(os.path.join(d, meta[0]["filename"])) as f:
+            self.text = f.read()
+
+    def svg(self):
+        return self.text
+
+
+def shape_table():
+    """{name: (frames, delay)} for the current VARIANT."""
+    shapes = {}
+    for name, fn in CURSORS.items():
+        if name in VARIANT.get("breeze", ()):
+            shapes[name] = ([BreezeCursor(name)], 0)
+        else:
+            shapes[name] = ([fn()], 0)
+    shapes["wait"] = ([wait_frame(i) for i in range(WAIT_FRAMES)], 45)
+    shapes["progress"] = ([progress_frame(i) for i in range(PROGRESS_FRAMES)], 70)
+    return shapes
 
 
 # ---- text
@@ -774,11 +850,7 @@ def build(out):
     os.makedirs(scal)
     os.makedirs(xcur)
 
-    shapes = {}
-    for name, fn in CURSORS.items():
-        shapes[name] = ([fn()], 0)
-    for name, (frames, delay) in ANIMATED.items():
-        shapes[name] = (frames, delay)
+    shapes = shape_table()
 
     for name, (frames, delay) in shapes.items():
         d = os.path.join(scal, name)
@@ -815,13 +887,19 @@ def build(out):
                 os.symlink(target, p)
 
     with open(os.path.join(out, "index.theme"), "w") as f:
-        f.write("[Icon Theme]\nName=%s\nComment=Cat paw cursors with pink toe beans\n"
-                "Inherits=breeze_cursors\n" % THEME_NAME)
+        f.write("[Icon Theme]\nName=%s\nComment=%s\nInherits=breeze_cursors\n"
+                % (VARIANT["name"], VARIANT["comment"]))
     return shapes
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="Build the Cat Paw cursor theme.")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="pink")
+    ap.add_argument("out", nargs="?", help="output dir (default: build/<theme dir>)")
+    args = ap.parse_args()
+    VARIANT = VARIANTS[args.variant]
     here = os.path.dirname(os.path.abspath(__file__))
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "build", THEME_DIR_NAME)
+    out = args.out or os.path.join(here, "build", VARIANT["dir"])
     shapes = build(out)
     print("built %d shapes into %s" % (len(shapes), out))
